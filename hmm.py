@@ -27,28 +27,79 @@ data['close_rate'] = np.append(0, percent)
 logreturn = np.array(np.log(data['Close'][1:])) - np.array(np.log(data['Close'][:-1]))
 data['logreturn'] = np.append(0, logreturn)
 
+#==============================================================================
+# 计算14期的RSI
+#==============================================================================
+up = [i if i>0 else 0 for i in data['close_diff']]
+down = [-i if i<0 else 0 for i in data['close_diff']]
+RSI = []
+for i in range(len(up)-14):
+    increase = sum(up[i:i+14])
+    decrease = sum(down[i:i+14]) if sum(down[i:i+14])>0 else 0.0001
+    RS = float(increase)/decrease
+    RS = 100 * RS / (1+RS)
+    RSI.append(RS)
+data['RSI'] = np.append([0]*14, RSI)
+
+
+#==============================================================================
+# 计算MACD及相关指标，包括DEA,DIF等
+#==============================================================================
+EMA12 = [data['Close'][0]]
+EMA26 = [data['Close'][0]]
+DIF = [0]
+DEA9 = [0]
+for i in range(len(data['Close'])-1):
+    EMA_short = EMA12[-1] * 11.0/13 + data['Close'].values[i+1] * 2.0/13
+    EMA_long = EMA26[-1] * 25.0/27 + data['Close'].values[i+1] * 2.0/27
+    dif = EMA_short - EMA_long
+    DEA = DEA9[-1] * 8.0/10 + dif * 2.0/10
+    EMA12.append(EMA_short)
+    EMA26.append(EMA_long)
+    DIF.append(dif)
+    DEA9.append(DEA)
+data['EMA12'] = EMA12
+data['EMA26'] = EMA26
+data['DIF'] = DIF
+data['DEA9'] = DEA9
+
+MACD = (data['DIF'] - data['DEA9']) * 2
+data['MACD'] = MACD
+
+
+#==============================================================================
+# 区分训练集和测试集，2016以前为训练集，以后为测试集
+#==============================================================================
 data_train = data[:'2015']
 data_test = data['2016']
 
 
 #==============================================================================
-# 读取对应数据，计算特征
-# 特征为：昨天和前天的收盘价变化，前天的对数收益率，前天的高低价差
+# 读取对应数据，对齐时间，计算特征
+# 采取的特征为：两期收盘价差，两期对数收益率，RSI, MACD, DIF, DEA
 #==============================================================================
-daterange = data_train.index
-close_diff = data_train['close_diff'][1:]
-logreturn = data_train['logreturn'][1:]
-high = data_train['High'][1:]
-low = data_train['Low'][1:]
+daterange = data_train.index[15:]
+close_diff = data_train['close_diff'][13:-1]
+logreturn = data_train['logreturn'][13:-1]
+high = data_train['High'][14:-1]
+low = data_train['Low'][14:-1]
+volume = data_train['Volume'][14:-1]
+RSI = data_train['RSI'][15:]
+MACD = data_train['MACD'][14:-1]
+EMA12 = data_train['EMA12'][14:-1]
+DIF = data_train['DIF'][14:-1]
+DEA = data_train['DEA9'][14:-1]
+EMA12 = data_train['EMA12'][14:-1]
+EMA26 = data_train['EMA26'][14:-1]
 HL_diff = np.array(np.log(high)) - np.array(np.log(low))
-
-X = np.column_stack([close_diff[:-1], close_diff[1:], logreturn[:-1], HL_diff[:-1]])
+      
+X = np.column_stack([close_diff[1:], close_diff[:-1], logreturn[1:], logreturn[:-1], RSI, MACD, DIF, DEA])
 
 
 #==============================================================================
 # 拟合模型并输出状态转移矩阵和各状态的输出函数参数
 #==============================================================================
-model = GaussianHMM(n_components=4, covariance_type='diag', n_iter=5000).fit(X)
+model = GaussianHMM(n_components=10, covariance_type='diag', n_iter=5000).fit(X)
 hidden_states = model.predict(X)
 
 print "Transition matrix"
@@ -75,7 +126,7 @@ for i in range(model.n_components):
     plt.legend(loc='best')
     plt.grid(1)
     
-data = pd.DataFrame({'daterange':daterange[1:-1], 'logreturn':logreturn[:-1],
+data = pd.DataFrame({'daterange':daterange, 'logreturn':logreturn[:-1],
                      'state':hidden_states})
 
 label = []  #label用于保存对每个状态是买还是卖的判断
@@ -116,17 +167,24 @@ plt.grid(1)
 
 
 #==============================================================================
-# 处理测试集的数据，滚动预测，为避免用到未来的数据，首先统一截断最后一天的数据
-# 同时由于特征需要前2期的数据，因此在2016年的数据前加入2015年的最后2期数据    
+# 计算测试集的特征，滚动预测，为避免用到未来的数据，首先统一截断最后一天的数据
+# 同时由于某些特征需要前2期的数据，因此在2016年的数据前加入2015年的最后2期数据  
 #==============================================================================
 daterange = data_test.index
 close_diff = np.append(data_train['close_diff'][-2:], data_test['close_diff'][:-1])
 logreturn = np.append(data_train['logreturn'][-2:], data_test['logreturn'][:-1])
-high = np.append(data_train['High'][-2:], data_test['High'][:-1])
-low = np.append(data_train['Low'][-2:], data_test['Low'][:-1])
+high = np.append(data_train['High'][-1:], data_test['High'][:-1])
+low = np.append(data_train['Low'][-1:], data_test['Low'][:-1])
+volume = np.append(data_train['Volume'][-1:], data_test['Volume'][:-1])
+RSI = data_test['RSI']
+MACD = np.append(data_train['MACD'][-1:], data_test['MACD'][:-1])
+EMA12 = np.append(data_train['EMA12'][-1:], data_test['EMA12'][:-1])
+EMA26 = np.append(data_train['EMA26'][-1:], data_test['EMA26'][:-1])
+DIF = np.append(data_train['DIF'][-1:], data_test['DIF'][:-1])
+DEA = np.append(data_train['DEA9'][-1:], data_test['DEA9'][:-1])
 HL_diff = np.array(np.log(high)) - np.array(np.log(low))
 
-Y = np.column_stack([close_diff[:-1], close_diff[1:], logreturn[:-1], HL_diff[:-1]])
+Y = np.column_stack([close_diff[1:], close_diff[:-1], logreturn[1:], logreturn[:-1], RSI, MACD, DIF, DEA])
 
 predict_states = model.predict(Y)
 
